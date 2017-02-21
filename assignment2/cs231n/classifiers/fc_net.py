@@ -179,7 +179,23 @@ class FullyConnectedNet(object):
     # beta2, etc. Scale parameters should be initialized to one and shift      #
     # parameters should be initialized to zero.                                #
     ############################################################################
-    pass
+    num_hidden_layers = len(hidden_dims)
+    
+    gamma, beta = {}, {}
+    # initialize first layer
+    self.params['W1'] = weight_scale * np.random.randn(input_dim, hidden_dims[0])
+    self.params['b1'] = np.zeros(hidden_dims[0])
+
+    # initialize hidden layers
+    for k in xrange(1, num_hidden_layers):
+        self.params['W%d' % (k + 1)] = weight_scale * np.random.randn(
+            hidden_dims[k-1], hidden_dims[k])
+        self.params['b%d' % (k + 1)] = np.zeros(hidden_dims[k])
+
+    # initialize last layer
+    self.params['W%d' % self.num_layers] = weight_scale * np.random.randn(
+        hidden_dims[-1], num_classes)
+    self.params['b%d' % self.num_layers] = np.zeros(num_classes)
     ############################################################################
     #                             END OF YOUR CODE                             #
     ############################################################################
@@ -189,6 +205,7 @@ class FullyConnectedNet(object):
     # (train / test). You can pass the same dropout_param to each dropout layer.
     self.dropout_param = {}
     if self.use_dropout:
+      print 'Use dropout with p = ', dropout
       self.dropout_param = {'mode': 'train', 'p': dropout}
       if seed is not None:
         self.dropout_param['seed'] = seed
@@ -200,7 +217,14 @@ class FullyConnectedNet(object):
     # pass of the second batch normalization layer, etc.
     self.bn_params = []
     if self.use_batchnorm:
+      print 'Use batchnorm!!'
       self.bn_params = [{'mode': 'train'} for i in xrange(self.num_layers - 1)]
+      gammas = {'gamma' + str(i + 1):
+               np.ones(hidden_dims[i]) for i in xrange(len(hidden_dims))}
+      betas = {'beta' + str(i + 1):
+              np.zeros(hidden_dims[i]) for i in xrange(len(hidden_dims))}
+      self.params.update(gammas)
+      self.params.update(betas)
     
     # Cast all parameters to the correct datatype
     for k, v in self.params.iteritems():
@@ -237,7 +261,33 @@ class FullyConnectedNet(object):
     # self.bn_params[1] to the forward pass for the second batch normalization #
     # layer, etc.                                                              #
     ############################################################################
-    pass
+    out, cache = [], []
+    out.append(X)
+    cache.append(None)
+    dropout_cache = [None]
+
+    # forward execpt last layer
+    for layer in xrange(1, self.num_layers):
+      if self.use_batchnorm:
+        o, c = affine_bn_relu_forward(out[layer-1], self.params['W%d' % layer],
+                                        self.params['b%d' % layer],
+                                        self.params['gamma%d' % layer],
+                                        self.params['beta%d' % layer],
+                                        self.bn_params[layer-1])
+      else:
+        o, c = affine_relu_forward(out[layer-1], self.params['W%d' % layer],
+                                   self.params['b%d' % layer])
+      cache.append(c)
+      if self.use_dropout:
+        o, c = dropout_forward(o, self.dropout_param)
+        dropout_cache.append(c)
+      out.append(o)
+
+    # forward last layer
+    scores, cache_scores = affine_forward(out[-1], 
+      self.params['W%d' % self.num_layers],
+      self.params['b%d' % self.num_layers])
+    
     ############################################################################
     #                             END OF YOUR CODE                             #
     ############################################################################
@@ -260,7 +310,31 @@ class FullyConnectedNet(object):
     # automated tests, make sure that your L2 regularization includes a factor #
     # of 0.5 to simplify the expression for the gradient.                      #
     ############################################################################
-    pass
+    loss, dscores = softmax_loss(scores, y)
+    # regularize
+    for _ in xrange(1, self.num_layers + 1):
+      w_tmp = self.params['W%d' % _]
+      loss += 0.5 * self.reg * np.sum(w_tmp**2)
+
+    dx, dw, db = affine_backward(dscores, cache_scores)
+    # regularization
+    dw += self.reg * self.params['W%d' % self.num_layers]
+    grads['W%d' % self.num_layers] = dw
+    grads['b%d' % self.num_layers] = db
+    for layer in xrange(self.num_layers - 1, 0, -1):
+      if self.use_dropout:
+          dx = dropout_backward(dx, dropout_cache[layer])
+      if self.use_batchnorm:
+        dx, dw, db, dgamma, dbeta = affine_bn_relu_backward(dx, cache[layer])
+        dw += self.reg * self.params['W%d' % layer]
+        grads['W%d' % layer] = dw
+        grads['b%d' % layer] = db
+        grads['gamma%d' % layer] = dgamma
+        grads['beta%d' % layer] = dbeta
+      else:
+        dx, dw, db = affine_relu_backward(dx, cache[layer])
+        grads['W%d' % layer] = dw + self.reg * self.params['W%d' % layer]
+        grads['b%d' % layer] = db
     ############################################################################
     #                             END OF YOUR CODE                             #
     ############################################################################

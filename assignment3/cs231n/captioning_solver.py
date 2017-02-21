@@ -1,22 +1,23 @@
 import numpy as np
 
 from cs231n import optim
+from cs231n.coco_utils import sample_coco_minibatch
 
 
-class Solver(object):
+class CaptioningSolver(object):
   """
-  A Solver encapsulates all the logic necessary for training classification
-  models. The Solver performs stochastic gradient descent using different
-  update rules defined in optim.py.
+  A CaptioningSolver encapsulates all the logic necessary for training
+  image captioning models. The CaptioningSolver performs stochastic gradient
+  descent using different update rules defined in optim.py.
 
   The solver accepts both training and validataion data and labels so it can
   periodically check classification accuracy on both training and validation
   data to watch out for overfitting.
 
-  To train a model, you will first construct a Solver instance, passing the
-  model, dataset, and various optoins (learning rate, batch size, etc) to the
-  constructor. You will then call the train() method to run the optimization
-  procedure and train the model.
+  To train a model, you will first construct a CaptioningSolver instance,
+  passing the model, dataset, and various options (learning rate, batch size,
+  etc) to the constructor. You will then call the train() method to run the 
+  optimization procedure and train the model.
   
   After the train() method returns, model.params will contain the parameters
   that performed best on the validation set over the course of training.
@@ -27,14 +28,9 @@ class Solver(object):
   
   Example usage might look something like this:
   
-  data = {
-    'X_train': # training data
-    'y_train': # training labels
-    'X_val': # validation data
-    'y_val': # validation labels
-  }
-  model = MyAwesomeModel(hidden_size=100, reg=10)
-  solver = Solver(model, data,
+  data = load_coco_data()
+  model = MyAwesomeModel(hidden_dim=100)
+  solver = CaptioningSolver(model, data,
                   update_rule='sgd',
                   optim_config={
                     'learning_rate': 1e-3,
@@ -45,27 +41,21 @@ class Solver(object):
   solver.train()
 
 
-  A Solver works on a model object that must conform to the following API:
+  A CaptioningSolver works on a model object that must conform to the following
+  API:
 
   - model.params must be a dictionary mapping string parameter names to numpy
     arrays containing parameter values.
 
-  - model.loss(X, y) must be a function that computes training-time loss and
-    gradients, and test-time classification scores, with the following inputs
-    and outputs:
+  - model.loss(features, captions) must be a function that computes
+    training-time loss and gradients, with the following inputs and outputs:
 
     Inputs:
-    - X: Array giving a minibatch of input data of shape (N, d_1, ..., d_k)
-    - y: Array of labels, of shape (N,) giving labels for X where y[i] is the
-      label for X[i].
+    - features: Array giving a minibatch of features for images, of shape (N, D
+    - captions: Array of captions for those images, of shape (N, T) where
+      each element is in the range (0, V].
 
     Returns:
-    If y is None, run a test-time forward pass and return:
-    - scores: Array of shape (N, C) giving classification scores for X where
-      scores[i, c] gives the score of class c for X[i].
-
-    If y is not None, run a training time forward and backward pass and return
-    a tuple of:
     - loss: Scalar giving the loss
     - grads: Dictionary with the same keys as self.params mapping parameter
       names to gradients of the loss with respect to those parameters.
@@ -73,16 +63,12 @@ class Solver(object):
 
   def __init__(self, model, data, **kwargs):
     """
-    Construct a new Solver instance.
+    Construct a new CaptioningSolver instance.
     
     Required arguments:
     - model: A model object conforming to the API described above
-    - data: A dictionary of training and validation data with the following:
-      'X_train': Array of shape (N_train, d_1, ..., d_k) giving training images
-      'X_val': Array of shape (N_val, d_1, ..., d_k) giving validation images
-      'y_train': Array of shape (N_train,) giving labels for training images
-      'y_val': Array of shape (N_val,) giving labels for validation images
-      
+    - data: A dictionary of training and validation data from load_coco_data
+
     Optional arguments:
     - update_rule: A string giving the name of an update rule in optim.py.
       Default is 'sgd'.
@@ -101,10 +87,7 @@ class Solver(object):
       training.
     """
     self.model = model
-    self.X_train = data['X_train']
-    self.y_train = data['y_train']
-    self.X_val = data['X_val']
-    self.y_val = data['y_val']
+    self.data = data
     
     # Unpack keyword arguments
     self.update_rule = kwargs.pop('update_rule', 'sgd')
@@ -156,13 +139,13 @@ class Solver(object):
     be called manually.
     """
     # Make a minibatch of training data
-    num_train = self.X_train.shape[0]
-    batch_mask = np.random.choice(num_train, self.batch_size)
-    X_batch = self.X_train[batch_mask]
-    y_batch = self.y_train[batch_mask]
+    minibatch = sample_coco_minibatch(self.data,
+                  batch_size=self.batch_size,
+                  split='train')
+    captions, features, urls = minibatch
 
     # Compute loss and gradient
-    loss, grads = self.model.loss(X_batch, y_batch)
+    loss, grads = self.model.loss(features, captions)
     self.loss_history.append(loss)
 
     # Perform a parameter update
@@ -173,7 +156,8 @@ class Solver(object):
       self.model.params[p] = next_w
       self.optim_configs[p] = next_config
 
-
+  
+  # TODO: This does nothing right now; maybe implement BLEU?
   def check_accuracy(self, X, y, num_samples=None, batch_size=100):
     """
     Check accuracy of the model on the provided data.
@@ -190,6 +174,7 @@ class Solver(object):
     - acc: Scalar giving the fraction of instances that were correctly
       classified by the model.
     """
+    return 0.0
     
     # Maybe subsample the data
     N = X.shape[0]
@@ -219,7 +204,7 @@ class Solver(object):
     """
     Run optimization to train the model.
     """
-    num_train = self.X_train.shape[0]
+    num_train = self.data['train_captions'].shape[0]
     iterations_per_epoch = max(num_train / self.batch_size, 1)
     num_iterations = self.num_epochs * iterations_per_epoch
 
@@ -241,26 +226,8 @@ class Solver(object):
 
       # Check train and val accuracy on the first iteration, the last
       # iteration, and at the end of each epoch.
-      first_it = (t == 0)
-      last_it = (t == num_iterations + 1)
-      if first_it or last_it or epoch_end:
-        train_acc = self.check_accuracy(self.X_train, self.y_train,
-                                        num_samples=1000)
-        val_acc = self.check_accuracy(self.X_val, self.y_val)
-        self.train_acc_history.append(train_acc)
-        self.val_acc_history.append(val_acc)
-
-        if self.verbose:
-          print '(Epoch %d / %d) train acc: %f; val_acc: %f' % (
-                 self.epoch, self.num_epochs, train_acc, val_acc)
-
-        # Keep track of the best model
-        if val_acc > self.best_val_acc:
-          self.best_val_acc = val_acc
-          self.best_params = {}
-          for k, v in self.model.params.iteritems():
-            self.best_params[k] = v.copy()
+      # TODO: Implement some logic to check Bleu on validation set periodically
 
     # At the end of training swap the best params into the model
-    self.model.params = self.best_params
+    # self.model.params = self.best_params
 
