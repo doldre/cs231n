@@ -9,7 +9,7 @@ class MyConvNet(object):
     """
     Architecture
 
-    [conv-bn-relu-pool] * 2 - [affine-bn-relu] * 2 - [affine-softmax]
+    [conv-bn-relu-pool] * 2 - [conv-bn-relu] - [affine-bn-relu] * 2 - [affine-softmax]
     The network operates on minibatches of data that have shape (N, C, H, W)
     consisting of N images, each with height H and width W and with C input
     channels.
@@ -46,25 +46,30 @@ class MyConvNet(object):
             num_filters, num_filters, filter_size, filter_size)
         self.params['b2'] = np.zeros(num_filters)
         self.params['W3'] = weight_scale * np.random.randn(
+            num_filters, num_filters, filter_size, filter_size)
+        self.params['b3'] = np.zeros(num_filters)
+        self.params['W4'] = weight_scale * np.random.randn(
             num_filters * H / 4 * W / 4, hidden_dim)
-        self.params['b3'] = np.zeros(hidden_dim)
-        self.params['W4'] = weight_scale * np.random.randn(hidden_dim, 
-                                                           hidden_dim)
         self.params['b4'] = np.zeros(hidden_dim)
         self.params['W5'] = weight_scale * np.random.randn(hidden_dim, 
+                                                           hidden_dim)
+        self.params['b5'] = np.zeros(hidden_dim)
+        self.params['W6'] = weight_scale * np.random.randn(hidden_dim, 
                                                            num_classes)
-        self.params['b5'] = np.zeros(num_classes)
+        self.params['b6'] = np.zeros(num_classes)
 
         print 'Use batchnorm!!'
         self.params['gamma1'] = np.ones(num_filters)
         self.params['beta1'] = np.zeros(num_filters)
         self.params['gamma2'] = np.ones(num_filters)
         self.params['beta2'] = np.zeros(num_filters)
-        self.params['gamma3'] = np.ones(hidden_dim)
-        self.params['beta3'] = np.zeros(hidden_dim)
+        self.params['gamma3'] = np.zeros(num_filters)
+        self.params['beta3'] = np.zeros(num_filters)
         self.params['gamma4'] = np.ones(hidden_dim)
         self.params['beta4'] = np.zeros(hidden_dim)
-        self.bn_params = [{'mode': 'train'} for i in xrange(4)]
+        self.params['gamma5'] = np.ones(hidden_dim)
+        self.params['beta5'] = np.zeros(hidden_dim)
+        self.bn_params = [{'mode': 'train'} for i in xrange(5)]
 
         for k, v in self.params.iteritems():
             self.params[k] = v.astype(dtype)
@@ -75,6 +80,7 @@ class MyConvNet(object):
         W3, b3 = self.params['W3'], self.params['b3']
         W4, b4 = self.params['W4'], self.params['b4']
         W5, b5 = self.params['W5'], self.params['b5']
+        W6, b6 = self.params['W6'], self.params['b6']
 
         # pass conv_param to the forward pass for the convolutional layer
         filter_size = W1.shape[2]
@@ -82,7 +88,7 @@ class MyConvNet(object):
 
         # pass pool_param to the forward pass for the max-pooling layer
         pool_param = {'pool_height': 2, 'pool_width': 2, 'stride': 2}
-        
+
         X = X.astype(self.dtype)
         mode = 'test' if y is None else 'train'
 
@@ -99,13 +105,17 @@ class MyConvNet(object):
             a1, W2, b2, conv_param,
             self.params['gamma2'], self.params['beta2'], self.bn_params[1],
             pool_param)
-        a3, c3 = affine_bn_relu_forward(
-            a2, W3, b3, self.params['gamma3'], self.params['beta3'],
-            self.bn_params[2])
+        a3, c3 = conv_bn_relu_forward(
+            a2, W3, b3, conv_param,
+            self.params['gamma3'], self.params['beta3'], self.bn_params[2],
+        )
         a4, c4 = affine_bn_relu_forward(
             a3, W4, b4, self.params['gamma4'], self.params['beta4'],
             self.bn_params[3])
-        scores, c5 = affine_forward(a4, W5, b5)
+        a5, c5 = affine_bn_relu_forward(
+            a4, W5, b5, self.params['gamma5'], self.params['beta5'],
+            self.bn_params[4])
+        scores, c6 = affine_forward(a5, W6, b6)
         
         if y is None:
             return scores
@@ -113,11 +123,13 @@ class MyConvNet(object):
         # backward pass
         loss, grads = 0, {}
         loss, dx = softmax_loss(scores, y)
-        dx, grads['W5'], grads['b5'] = affine_backward(dx, c5)
+        dx, grads['W6'], grads['b6'] = affine_backward(dx, c6)
+        dx, grads['W5'], grads['b5'], grads['gamma5'], grads['beta5'] = (
+            affine_bn_relu_backward(dx, c5))
         dx, grads['W4'], grads['b4'], grads['gamma4'], grads['beta4'] = (
             affine_bn_relu_backward(dx, c4))
         dx, grads['W3'], grads['b3'], grads['gamma3'], grads['beta3'] = (
-            affine_bn_relu_backward(dx, c3))
+            conv_bn_relu_backward(dx, c3))
         dx, grads['W2'], grads['b2'], grads['gamma2'], grads['beta2'] = (
             conv_bn_relu_pool_backward(dx, c2))
         dx, grads['W1'], grads['b1'], grads['gamma1'], grads['beta1'] = (
@@ -126,8 +138,9 @@ class MyConvNet(object):
         # relularization
         loss += 0.5 * self.reg * (np.sum(W1 * W1) + np.sum(W2 * W2) + 
                                   np.sum(W3 * W3) + np.sum(W4 * W4) +
-                                  np.sum(W5 * W5))
-
+                                  np.sum(W5 * W5) + np.sum(W6 * W6))
+        
+        grads['W6'] += self.reg * W6
         grads['W5'] += self.reg * W5
         grads['W4'] += self.reg * W4
         grads['W3'] += self.reg * W3
